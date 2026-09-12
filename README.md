@@ -263,7 +263,7 @@ it.
 Add it to `build.zig.zon`:
 
 ```console
-$ zig fetch --save=m3u git+https://git.jcollie.dev/jeff/zig-m3u.git
+$ zig fetch --save=m3u git+https://github.com/jcollie/zig-m3u
 ```
 
 and in `build.zig`:
@@ -277,6 +277,17 @@ Two dependencies, both fetched by the Zig build system: [zig-uri][zig-uri]
 for the URIs and [zig-datetime][zig-datetime] for the dates. Nothing else is
 needed to build the library; the flake's devshell is for the tooling around
 it.
+
+That `zig fetch` URL is the GitHub mirror rather than the canonical Forgejo,
+because it is read by whoever depends on this and GitHub is the more
+reachable of the two. The same reasoning picks the URLs *this* fetches from:
+zig-datetime from its GitHub mirror, zig-uri from its Codeberg one.
+
+One link in the chain is still a personal forge, and it is not one this
+repository can move: zig-uri's own manifest pins **z46** at
+`git.jcollie.dev`, so building this from scratch needs that host up even
+though nothing here names it. The fix belongs in zig-uri, whose `z46` is
+mirrored to Codeberg too.
 
 `build.zig.zon.nix` is the same dependency set for Nix, which has no network,
 and is generated rather than written:
@@ -358,13 +369,20 @@ refuses either from a `file://` page.
 
 ## Where this lives
 
-Three places, all with the same history, the same name and `main` as the
+Four places, all with the same history, the same name and `main` as the
 default branch. The first is the canonical one, and is what `REUSE.toml` and
 `package.nix` record, where the issues and the continuous integration are,
 and where the published documentation comes from:
 
 ```console
 $ git clone https://git.jcollie.dev/jeff/zig-m3u.git
+```
+
+It is mirrored to GitHub, and that is the copy Zig fetches from, for the
+reason given under *Using it* above:
+
+```console
+$ git clone https://github.com/jcollie/zig-m3u.git
 ```
 
 It is mirrored on Tangled at <https://tangled.org/jcollie.dev/zig-m3u>, a

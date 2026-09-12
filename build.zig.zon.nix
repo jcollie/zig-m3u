@@ -223,7 +223,7 @@ copyFarm name
       name = "uri-0.1.0-yCrwNDeWEQAu6MkfDY_ucBK05hxa6fQTpyzrmAOTXrag";
       path = fetchZigArtifact {
         name = "uri";
-        url = "git+https://git.jcollie.dev/jeff/zig-uri.git#8ed08e670ee3c32711bef2f8eadb65726a68e53d";
+        url = "git+https://codeberg.org/jcollie/zig-uri.git#8ed08e670ee3c32711bef2f8eadb65726a68e53d";
         hash = "sha256-jcv24dQLi9WgVHd/m03yUIF0mapDWiV8+PXO1TB2TIE=";
         unpack = true;
       };
