@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: © 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+# SPDX-License-Identifier: MIT
+
+name: test
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: nixos-do-s
+    steps:
+      - name: Check out
+        uses: https://code.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check REUSE compliance
+        run: nix develop -c reuse lint
+
+      - name: Check Zig formatting compliance
+        run: nix develop -c zig fmt --check .
+
+      - name: Test
+        run: nix develop -c zig build test --summary all
+
+      - name: Build
+        run: nix develop -c zig build
+
+      # Nothing else builds the fuzz driver, so without this it could stop
+      # compiling and the test step would not notice.
+      - name: Build everything that is not built by the steps above
+        run: nix develop -c zig build check
+
+      # Two and a half million inputs across the eight targets, and about a
+      # minute. Bounded by a count rather than a clock so that the run is the
+      # same on every machine, and short because this is here to catch a
+      # property that a change has made false rather than to search: a real
+      # campaign is `zig build fuzz-run -- --seconds 600` on somebody's own
+      # machine.
+      #
+      # It has earned its place. Every round-trip bug this library has had --
+      # an `#EXTINF` whose title outlived its duration, a tag dropped because
+      # its value would not parse and taking the playlist's *kind* with it, an
+      # attribute value ending in a carriage return that the next line feed
+      # swallowed -- was found here rather than by a test somebody thought to
+      # write.
+      - name: Fuzz the parser and the writer
+        run: nix develop -c zig build fuzz-run -- --iterations 300000
+
+      # The one check that is not this library checking its own work: ffmpeg
+      # writes a real HLS stream, this library rewrites its playlist, and
+      # ffprobe decodes the media through the result. Everything above would
+      # be satisfied by a writer that emitted a format only this parser could
+      # read; this would not.
+      - name: Check against ffmpeg
+        run: nix flake check --print-build-logs
+
+  # Published only from main, so that a branch build cannot replace the site
+  # with a work in progress, and only after `test` has passed, so that it
+  # cannot document a tree that does not compile.
+  docs:
+    needs: test
+    if: ${{ forge.ref == 'refs/heads/main' }}
+    runs-on: nixos-do-s
+    steps:
+      - name: Check out
+        uses: https://code.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `--system` because the Nix build has no network and `zig build` would
+      # otherwise try to fetch the dependencies itself. `zig-deps` is the
+      # dependency set on its own, so this does not build the package to get
+      # at it.
+      - name: Build API docs
+        run: >
+          nix develop -c zig build docs
+          --system "$(nix build --print-out-paths .#zig-deps)"
+
+      - name: Publish docs
+        run: >
+          nix develop -c git-pages-cli https://jeff.jcollie.page/zig-m3u/
+          --server jcollie.page
+          --token ${{ forge.token }}
+          --upload-dir zig-out/docs

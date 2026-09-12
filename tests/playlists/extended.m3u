@@ -1,0 +1,14 @@
+#EXTM3U
+#PLAYLIST:Songs for a long drive
+#EXTALB:Kind of Blue
+#EXTART:Miles Davis
+#EXTINF:553,Miles Davis - So What
+so-what.flac
+#EXTINF:562,Miles Davis - Freddie Freeloader
+freddie-freeloader.flac
+#EXTGRP:Side two
+#EXTINF:337,Miles Davis - Blue in Green
+blue-in-green.flac
+#EXTVLCOPT:gain=0.8
+#EXTINF:691,Miles Davis - All Blues
+all-blues.flac

@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-MEDIA-SEQUENCE:1
+#EXTINF:9.009,
+first.ts
+stray-uri-with-no-extinf.ts
+#EXTINF:30.0,
+far-too-long.ts
+#EXT-X-ENDLIST

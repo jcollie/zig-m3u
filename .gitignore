@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+# SPDX-License-Identifier: MIT
+
+.zig-cache/
+zig-out/
+zig-pkg/
+
+# The symlink `nix build` leaves behind.
+/result
+
+# Where Zig's fuzzer -- and `zig build fuzz-run` -- puts an input that failed.
+# Worth reading and, if it is a shape rather than an accident, worth adding to
+# the seeds in tests/fuzz.zig -- but not worth keeping as it lands.
+/fuzz-findings/

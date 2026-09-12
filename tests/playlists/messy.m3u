@@ -1,0 +1,8 @@
+﻿#EXT-X-TARGETDURATION:10.0
+#EXT-X-Version:3
+#EXT-X-KEY:METHOD=AES-128, URI=key.bin
+#EXTINF:9.009, With a title 
+first.ts
+#EXTINF:9.009,
+second.ts
+#EXT-X-ENDLIST

@@ -1,0 +1,22 @@
+.{
+    .name = .zig_m3u,
+    .version = "0.0.0",
+    .fingerprint = 0xd6f802d04dbfe209, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .uri = .{
+            .url = "git+https://git.jcollie.dev/jeff/zig-uri.git#8ed08e670ee3c32711bef2f8eadb65726a68e53d",
+            .hash = "uri-0.1.0-yCrwNDeWEQAu6MkfDY_ucBK05hxa6fQTpyzrmAOTXrag",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "tools",
+        "LICENSES",
+        "REUSE.toml",
+        "README.md",
+    },
+}

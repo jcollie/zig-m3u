@@ -1,0 +1,12 @@
+#EXTM3U
+#EXT-X-VERSION:8
+#EXT-X-DEFINE:NAME="host",VALUE="cdn.example.com"
+#EXT-X-DEFINE:NAME="path",VALUE="/hls/720p"
+#EXT-X-DEFINE:IMPORT="session"
+#EXT-X-DEFINE:QUERYPARAM="token"
+#EXT-X-TARGETDURATION:6
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.0,
+https://{$host}{$path}/seg1.ts?token={$token}
+#EXTINF:6.0,
+https://{$host}{$path}/seg2.ts?token={$token}
