@@ -358,11 +358,43 @@ refuses either from a `file://` page.
 
 ## Where this lives
 
+Three places, all with the same history, the same name and `main` as the
+default branch. The first is the canonical one, and is what `REUSE.toml` and
+`package.nix` record, where the issues and the continuous integration are,
+and where the published documentation comes from:
+
 ```console
 $ git clone https://git.jcollie.dev/jeff/zig-m3u.git
 ```
 
-which is the canonical home, and what `REUSE.toml` and `package.nix` record.
+It is mirrored on Tangled at <https://tangled.org/jcollie.dev/zig-m3u>, a
+forge built on the AT Protocol, where a repository is addressed by its
+owner's identity rather than by a server name.
+
+It is also published on [Radicle][radicle], a peer-to-peer forge that needs
+no account on anything. A Radicle repository is findable **only** by its
+repository ID, so leaving the ID out of a README leaves out the one thing a
+reader needs — here it is:
+
+```console
+$ rad clone rad:z3vjHeM2isQStRCGdSRF8N7wVG48t
+```
+
+`rad clone` finds seeds through your local node's routing table, so the node
+has to be running first, and cloning seeds the repository in turn, which
+helps keep it available:
+
+```console
+$ rad node start
+```
+
+If you already have it and only want to help host it:
+
+```console
+$ rad seed rad:z3vjHeM2isQStRCGdSRF8N7wVG48t
+```
+
+[radicle]: https://radicle.xyz
 
 ## Licence
 
