@@ -157,6 +157,69 @@ in
 copyFarm name
   [
     {
+      name = "N-V-__8AAJ77GgCr4jV_q5d8vuaUZIWMrHbXUMYV7il4sgLB";
+      path = fetchZigArtifact {
+        name = "cldr_core";
+        url = "https://registry.npmjs.org/cldr-core/-/cldr-core-48.2.0.tgz";
+        hash = "sha256-UxDgx6BsH+uD3I5UyFhLvgucLqgyAXKhjVQZhrEkWF0=";
+        unpack = false;
+      };
+    }
+    {
+      name = "N-V-__8AAGszqAU24FLBIkgdecxizqeniOtXvaJyJNhnerSV";
+      path = fetchZigArtifact {
+        name = "cldr_dates";
+        url = "https://registry.npmjs.org/cldr-dates-full/-/cldr-dates-full-48.2.0.tgz";
+        hash = "sha256-Albxzv7KFPfVFb5Ict2kj83X51OBQw8lqv0BQ+rltDA=";
+        unpack = false;
+      };
+    }
+    {
+      name = "N-V-__8AAP5iTQJ7vhRS_dLVKhpakujqxJsIbu89VYJgXryk";
+      path = fetchZigArtifact {
+        name = "cldr_numbers";
+        url = "https://registry.npmjs.org/cldr-numbers-full/-/cldr-numbers-full-48.2.0.tgz";
+        hash = "sha256-LRehRTxVmmIRLK7tUuC8/jy4U5yZ0jmue37U0IJ2edk=";
+        unpack = false;
+      };
+    }
+    {
+      name = "datetime-0.0.1-6-va79gDDwCD7vUCwnd8YeSBQlXh5xq-yjnhzeT7VCYw";
+      path = fetchZigArtifact {
+        name = "datetime";
+        url = "git+https://github.com/jcollie/zig-datetime#bd76e05460dba019f7749e44a37ea5afe6c49609";
+        hash = "sha256-hVLUAc9Mm5HjLSkUURlb4nW2sn78ZvrWKsaC1cdzCuE=";
+        unpack = true;
+      };
+    }
+    {
+      name = "N-V-__8AAHNhQgCiWfjOCo_LQgx55jnHBr2Z61ZAqPU9n5Uo";
+      path = fetchZigArtifact {
+        name = "moment";
+        url = "https://registry.npmjs.org/moment/-/moment-2.30.1.tgz";
+        hash = "sha256-UiGan+5eH6reTHJTbBc8VM7dXiYZJy3QwlGjCur83ow=";
+        unpack = false;
+      };
+    }
+    {
+      name = "N-V-__8AABybDwDd46ZHFqBjb0twea7p9vwNzdSzUHFwA55f";
+      path = fetchZigArtifact {
+        name = "tzcode";
+        url = "https://data.iana.org/time-zones/releases/tzcode2026d.tar.gz";
+        hash = "sha256-L1yff+Kea4y4Y1g2Z4hLjOF7CkhTVaBUtZHGvfzYF5E=";
+        unpack = false;
+      };
+    }
+    {
+      name = "N-V-__8AAFiAFQDNovBNmFwF3hznlSfpY7KwAN3Jy7rhie29";
+      path = fetchZigArtifact {
+        name = "tzdata";
+        url = "https://data.iana.org/time-zones/releases/tzdata2026d.tar.gz";
+        hash = "sha256-DLKqjjM8PcBJutxCoMYfIZh7jNROEH+pALrXZKrMd2c=";
+        unpack = false;
+      };
+    }
+    {
       name = "uri-0.1.0-yCrwNDeWEQAu6MkfDY_ucBK05hxa6fQTpyzrmAOTXrag";
       path = fetchZigArtifact {
         name = "uri";
@@ -180,6 +243,15 @@ copyFarm name
         name = "z46";
         url = "git+https://git.jcollie.dev/jeff/z46.git#52bc1256116cde4b3e7480d8664da09e5901490a";
         hash = "sha256-U2dGmTMhQI+Yc0Zw9K9rGq1vRSqqTOxI51zxbtiI1Bk=";
+        unpack = true;
+      };
+    }
+    {
+      name = "win32-42.0.39-preview-mX5pFS564gPTezZn4v3TMxRnfJUrZNx1B_F2p2HKXOeG";
+      path = fetchZigArtifact {
+        name = "zigwin32";
+        url = "git+https://github.com/marlersoft/zigwin32#9f15c276b4e9d05afd34a10d8662a7dfc34647ea";
+        hash = "sha256-JCmUrieEnOKQViUGjPNrlGwJMMM4X/BjC3iur5fRbqA=";
         unpack = true;
       };
     }

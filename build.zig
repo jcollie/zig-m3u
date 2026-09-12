@@ -14,6 +14,12 @@ pub fn build(b: *std.Build) void {
     // it rather than this project growing a second URI parser.
     const uri = b.dependency("uri", .{ .target = target, .optimize = optimize });
 
+    // `#EXT-X-PROGRAM-DATE-TIME` and `#EXT-X-DATERANGE` carry ISO 8601 dates,
+    // and a programme date reaches back before 1970 -- which `std.time.epoch`
+    // cannot represent and only decodes anyway. zig-datetime does the
+    // calendar, the parsing and the instants.
+    const datetime = b.dependency("datetime", .{ .target = target, .optimize = optimize });
+
     // One module. The line scanner, the attribute grammar, the tag types, the
     // parser and the writer are all one job — reading and writing this file
     // format — and Zig only analyses what is referenced, so a program that
@@ -21,7 +27,10 @@ pub fn build(b: *std.Build) void {
     const mod = b.addModule("m3u", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
-        .imports = &.{.{ .name = "uri", .module = uri.module("uri") }},
+        .imports = &.{
+            .{ .name = "uri", .module = uri.module("uri") },
+            .{ .name = "datetime", .module = datetime.module("datetime") },
+        },
     });
 
     const exe = b.addExecutable(.{

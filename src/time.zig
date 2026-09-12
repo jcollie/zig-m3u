@@ -9,253 +9,201 @@
 //! example has every part of it: a fraction of a second and an offset that is
 //! not UTC.
 //!
+//! [zig-datetime](https://git.jcollie.dev/jeff/zig-datetime) does the work:
+//! the ISO 8601 grammar, the calendar, the range checking and the conversion
+//! to and from instants. This file is the thin layer between it and the two
+//! things a playlist needs that a date value cannot carry on its own.
+//!
 //! # Why this is not `std.time.epoch`
 //!
-//! `std.time.epoch` only decodes. It turns a second count into a date and has
-//! nothing going the other way, and its `EpochSeconds.secs` is a `u64`, so it
-//! cannot hold a date before 1970 — which a programme date certainly can, for
-//! an archive of something broadcast in 1969. What is here instead is Howard
-//! Hinnant's pair of calendar algorithms, `daysFromCivil` and `civilFromDays`,
-//! which are exact over the whole proleptic Gregorian calendar in both
-//! directions and are about fifteen lines each.
+//! It only decodes — it turns a second count into a date and has nothing
+//! going the other way — and its `EpochSeconds.secs` is a `u64`, so it cannot
+//! hold a date before 1970, which a programme date certainly can: an archive
+//! of something broadcast in 1969 has one.
 //!
-//! # What a `DateTime` keeps, and why it keeps it
+//! # What this adds to a date, and why
 //!
-//! More than an instant. A `DateTime` holds the fields as written, the number
-//! of digits the fraction was written with, and how the zone was spelled, so
-//! that a playlist read and written again says the same thing rather than the
-//! same instant in a different notation. `2010-02-19T14:54:23.031+08:00` and
-//! `2010-02-19T06:54:23.031Z` are the same moment, and a tool that rewrote one
-//! into the other would be changing a file it was asked to leave alone.
+//! Two things, and both of them are about *notation* rather than about time.
 //!
-//! `toUnixNanoseconds` is there for when the instant is what is wanted.
+//! `2010-02-19T14:54:23.031+08:00` and `2010-02-19T06:54:23.031Z` are the
+//! same moment written two ways, and a tool asked to change one tag in a
+//! playlist must not rewrite every date in it into a different notation. So a
+//! `DateTime` here records how the offset was spelled — `Z` is not `+00:00`,
+//! though they mean the same instant — and how many digits the fraction was
+//! written with, since `...:23Z`, `...:23.0Z` and `...:23.000Z` are three
+//! spellings of one time. zig-datetime's `iso8601.ParseResult` reports
+//! neither, having no reason to: they are the same date.
+//!
+//! Everything else comes from the value inside. `dt.value` is a
+//! `datetime.DateTime`, so `add`, `toInstant`, `asDate`, `isoWeek`,
+//! `dayOfThisYear` and the rest are all there, and `Month` is an enum rather
+//! than a number.
 
 const std = @import("std");
 const Io = std.Io;
 
-/// A date and time with an offset from UTC, as ISO 8601 writes one.
-///
-/// Every field is in the range its name implies once the value has come from
-/// `parse`; a `DateTime` assembled by hand is checked by `validate`.
+const datetime = @import("datetime");
+
+/// zig-datetime itself, for a caller that wants more of it than this
+/// re-exports — timezones, durations, locale-aware formatting.
+pub const dt = datetime;
+
+/// Re-exported so that reading a playlist's dates does not oblige a caller
+/// to name zig-datetime as a dependency of their own.
+pub const Month = datetime.Month;
+pub const Date = datetime.Date;
+pub const Instant = datetime.Instant;
+pub const Duration = datetime.Duration;
+pub const DayOfWeek = datetime.DayOfWeek;
+
+/// The years `format` can write with four digits, which is every year a
+/// playlist has any business carrying.
+pub const min_year = 0;
+pub const max_year = 9999;
+
+/// A date and time as a playlist writes one: an instant, and the notation it
+/// was written in.
 pub const DateTime = struct {
-    /// The proleptic Gregorian year. `parse` accepts four digits, so from
-    /// there this is 0 to 9999; the calendar arithmetic below is exact well
-    /// outside that.
-    year: i32,
-    /// 1 to 12.
-    month: u8,
-    /// 1 to the length of `month` in `year`.
-    day: u8,
-    /// 0 to 23.
-    hour: u8,
-    /// 0 to 59.
-    minute: u8,
-    /// 0 to 60. Sixty is a leap second, which ISO 8601 allows and which
-    /// `toUnixNanoseconds` reports as the first instant of the next minute —
-    /// the same thing every other implementation does, since the alternative
-    /// is a table of leap seconds that goes stale.
-    second: u8,
-    /// The fraction of a second, in nanoseconds: 0 to 999_999_999.
-    nanosecond: u32 = 0,
-    /// How many digits the fraction was written with, so that `format` can
-    /// write it back the same width. Zero means there was no fraction at all,
-    /// which is different from a fraction of zero: `...:23Z` and `...:23.000Z`
-    /// are both read and both written back as they came.
+    /// The date, the time and the offset from UTC. zig-datetime holds the
+    /// offset in **seconds** east of UTC, because a historical local mean
+    /// time offset is not a whole number of minutes; every offset a playlist
+    /// carries is.
+    value: datetime.DateTime,
+    /// How many digits the fraction of a second was written with, so that
+    /// `format` can write it back the same width. Zero means there was no
+    /// fraction at all, which is not the same as a fraction of zero:
+    /// `...:23Z` and `...:23.000Z` are both read and both written as they
+    /// came.
     ///
     /// At most 9. A fraction written with more digits than that is truncated
     /// to nanoseconds, which is the one place `parse` loses information.
     fraction_digits: u8 = 0,
-    /// Minutes east of UTC: `+08:00` is 480, `-05:30` is -330.
-    offset_minutes: i16 = 0,
     /// How the offset was written, which `format` reproduces.
     zone: Zone = .utc,
 
     /// How the offset from UTC was spelled.
     pub const Zone = enum {
-        /// `Z`. `offset_minutes` is zero.
+        /// `Z`, and `value.offset` is zero.
         utc,
-        /// `+HH:MM` or `-HH:MM`, including `+00:00` — which means the same
+        /// `+HH:MM` or `-HH:MM`, including `+00:00` — which names the same
         /// instant as `Z` and is not the same six characters.
         offset,
         /// Nothing at all, which ISO 8601 reads as local time.
         ///
         /// RFC 8216 §4.3.2.6 requires a zone, so this only arrives from a
-        /// lenient `parse`, and it is reported as a `Problem`. Treating it as
-        /// UTC is a guess, so `toUnixNanoseconds` refuses it rather than
-        /// making one.
+        /// lenient `parse` and is reported as a `Problem`. Which instant it
+        /// names depends on where the reader is, so `toInstant` refuses it
+        /// rather than guessing.
         none,
     };
 
     pub const ParseError = error{
-        /// The text is not `YYYY-MM-DDTHH:MM:SS` with an optional fraction
-        /// and an optional zone: a separator is wrong, a field is the wrong
-        /// width, or there is trailing rubbish.
+        /// The text is not an ISO 8601 date *and* time, or there is trailing
+        /// rubbish after it.
         InvalidDateTime,
         /// Every field is a number and at least one of them is out of range:
-        /// a thirteenth month, the thirtieth of February, an offset of more
-        /// than a day.
+        /// a thirteenth month, the thirtieth of February, a year `format`
+        /// could not write back.
         DateOutOfRange,
     };
 
-    /// Read `YYYY-MM-DDTHH:MM:SS[.fraction][Z|±HH:MM]`.
+    /// Read an ISO 8601 date and time.
     ///
-    /// Lenient in three ways, each of which is something real playlists do
-    /// and none of which loses information:
+    /// Whatever zig-datetime accepts, which is more than RFC 8216 asks for
+    /// and all of it harmless: `T`, `t` or a space between the date and the
+    /// time; `Z`, `z`, `±HH:MM`, `±HHMM`, `±HH` or no zone at all; the basic
+    /// form `20200101T000000Z` as well as the extended one; a week date;
+    /// a fraction of any width. `format` writes the extended form with a
+    /// calendar date, so a playlist written in one of the others comes back
+    /// in this one — naming the same instant, which is why the round trip
+    /// still settles.
     ///
-    /// * The date and time may be joined by `T`, `t` or a space. `format`
-    ///   always writes `T`.
-    /// * The offset may be written `±HHMM` or `±HH` as well as `±HH:MM`.
-    ///   `format` always writes `±HH:MM`.
-    /// * The zone may be left off entirely, which gives `zone == .none`.
+    /// Two things are refused that zig-datetime allows on its own, because
+    /// RFC 8216 needs them refused:
     ///
-    /// It is strict about the widths of the fields, because `2010-2-19` is
-    /// ambiguous with nothing and is not what any tool writes; about the
-    /// ranges, so that `2010-02-30` is an error here rather than a surprise
-    /// in whatever does arithmetic on it; and about trailing text, so that a
-    /// quoted date with a stray character in it does not parse to the date
-    /// without it.
+    /// * A date with no time on it. `2010-02-19` is a perfectly good ISO 8601
+    ///   date and is not what §4.3.2.6 asks for, and reading it as midnight
+    ///   would invent a time the playlist did not give.
+    /// * Trailing text. zig-datetime parses a prefix and reports what it
+    ///   consumed, which is right for a scanner and wrong here: a quoted
+    ///   `START-DATE` with a stray character in it must not parse to the date
+    ///   without it.
     pub fn parse(text: []const u8) ParseError!DateTime {
-        // `YYYY-MM-DDTHH:MM:SS` is nineteen characters and nothing shorter
-        // can be a date and a time.
-        if (text.len < 19) return error.InvalidDateTime;
-        if (text[4] != '-' or text[7] != '-') return error.InvalidDateTime;
-        if (text[10] != 'T' and text[10] != 't' and text[10] != ' ') return error.InvalidDateTime;
-        if (text[13] != ':' or text[16] != ':') return error.InvalidDateTime;
-
-        // Read every field as a wide integer and narrow only after the range
-        // check below: `@intCast` of a two-digit number into a field that
-        // cannot hold it is a panic rather than an error, so a playlist
-        // saying `2010-99-01` would crash whatever was listing it.
-        const year = try digits(text[0..4]);
-        const month = try digits(text[5..7]);
-        const day = try digits(text[8..10]);
-        const hour = try digits(text[11..13]);
-        const minute = try digits(text[14..16]);
-        const second = try digits(text[17..19]);
-
-        var rest = text[19..];
-
-        var nanosecond: u32 = 0;
-        var fraction_digits: u8 = 0;
-        if (rest.len > 0 and rest[0] == '.') {
-            rest = rest[1..];
-            var count: usize = 0;
-            while (count < rest.len and rest[count] >= '0' and rest[count] <= '9') count += 1;
-            if (count == 0) return error.InvalidDateTime;
-            // Nanosecond resolution, so nine digits are kept and anything
-            // beyond them is dropped. Rounding instead would let a date move
-            // forwards every time a playlist was rewritten.
-            const kept = @min(count, 9);
-            var scale: u32 = 1_000_000_000;
-            for (rest[0..kept]) |c| {
-                scale /= 10;
-                nanosecond += @as(u32, c - '0') * scale;
-            }
-            fraction_digits = @intCast(kept);
-            rest = rest[count..];
+        const result = datetime.iso8601.parse(text) catch |err| return switch (err) {
+            error.OutOfRange => error.DateOutOfRange,
+            error.ParseError, error.MixedFormats, error.BadFraction => error.InvalidDateTime,
+        };
+        if (result.precision != .second) return error.InvalidDateTime;
+        if (result.str.len != text.len) return error.InvalidDateTime;
+        if (result.value.year < min_year or result.value.year > max_year) {
+            return error.DateOutOfRange;
         }
-
-        var zone: Zone = .none;
-        var offset_minutes: i32 = 0;
-        if (rest.len > 0) {
-            switch (rest[0]) {
-                'Z', 'z' => {
-                    zone = .utc;
-                    rest = rest[1..];
-                },
-                '+', '-' => {
-                    const negative = rest[0] == '-';
-                    rest = rest[1..];
-                    if (rest.len < 2) return error.InvalidDateTime;
-                    const offset_hours = try digits(rest[0..2]);
-                    rest = rest[2..];
-                    var offset_mins: u64 = 0;
-                    if (rest.len > 0 and rest[0] == ':') {
-                        if (rest.len < 3) return error.InvalidDateTime;
-                        offset_mins = try digits(rest[1..3]);
-                        rest = rest[3..];
-                    } else if (rest.len >= 2 and rest[0] >= '0' and rest[0] <= '9') {
-                        offset_mins = try digits(rest[0..2]);
-                        rest = rest[2..];
-                    }
-                    if (offset_hours > 23 or offset_mins > 59) return error.DateOutOfRange;
-                    const total: i32 = @intCast(offset_hours * 60 + offset_mins);
-                    offset_minutes = if (negative) -total else total;
-                    zone = .offset;
-                },
-                else => return error.InvalidDateTime,
-            }
-        }
-        if (rest.len != 0) return error.InvalidDateTime;
-
-        if (month < 1 or month > 12) return error.DateOutOfRange;
-        if (hour > 23 or minute > 59 or second > 60) return error.DateOutOfRange;
-        const year_narrow: i32 = @intCast(year);
-        if (day < 1 or day > daysInMonth(year_narrow, @intCast(month))) return error.DateOutOfRange;
 
         return .{
-            .year = year_narrow,
-            .month = @intCast(month),
-            .day = @intCast(day),
-            .hour = @intCast(hour),
-            .minute = @intCast(minute),
-            .second = @intCast(second),
-            .nanosecond = nanosecond,
-            .fraction_digits = fraction_digits,
-            .offset_minutes = @intCast(offset_minutes),
-            .zone = zone,
+            .value = result.value,
+            .fraction_digits = fractionDigits(text),
+            .zone = if (!result.has_offset)
+                .none
+            else if (text[text.len - 1] == 'Z' or text[text.len - 1] == 'z')
+                .utc
+            else
+                .offset,
         };
     }
 
     pub const ValidateError = error{DateOutOfRange};
 
-    /// Check a `DateTime` that was assembled rather than parsed. `format`
-    /// would otherwise write something that does not parse back.
-    pub fn validate(dt: DateTime) ValidateError!void {
-        if (dt.month < 1 or dt.month > 12) return error.DateOutOfRange;
-        if (dt.day < 1 or dt.day > daysInMonth(dt.year, dt.month)) return error.DateOutOfRange;
-        if (dt.hour > 23 or dt.minute > 59 or dt.second > 60) return error.DateOutOfRange;
-        if (dt.nanosecond > 999_999_999) return error.DateOutOfRange;
-        if (dt.fraction_digits > 9) return error.DateOutOfRange;
-        if (dt.offset_minutes <= -1440 or dt.offset_minutes >= 1440) return error.DateOutOfRange;
-        if (dt.zone == .utc and dt.offset_minutes != 0) return error.DateOutOfRange;
-        if (dt.year < 0 or dt.year > 9999) return error.DateOutOfRange;
+    /// Check a `DateTime` that was assembled rather than parsed.
+    ///
+    /// zig-datetime's types carry most of this — `Month` is an enum, so a
+    /// thirteenth month cannot be written down — and what is left is the day
+    /// against the length of its month, the width of the fraction, and the
+    /// one contradiction this file's own fields allow: a `Z` with an offset
+    /// on it. Without the check `format` would write something `parse` would
+    /// not read back.
+    pub fn validate(self: DateTime) ValidateError!void {
+        if (self.value.year < min_year or self.value.year > max_year) return error.DateOutOfRange;
+        if (self.value.day < 1 or self.value.day > self.value.month.lastDay(self.value.year)) {
+            return error.DateOutOfRange;
+        }
+        if (self.value.hour > 23 or self.value.minute > 59 or self.value.second > 60) {
+            return error.DateOutOfRange;
+        }
+        if (self.value.nanosecond > 999_999_999) return error.DateOutOfRange;
+        if (self.fraction_digits > 9) return error.DateOutOfRange;
+        if (@abs(self.value.offset) >= std.time.s_per_day) return error.DateOutOfRange;
+        if (self.zone == .utc and self.value.offset != 0) return error.DateOutOfRange;
     }
 
     /// Write the date back in the notation it was read in.
     ///
-    /// Reached by `{f}`. The year is written with four digits, so a
-    /// `DateTime` outside 0 to 9999 — which `parse` cannot produce and
-    /// `validate` rejects — comes out wider than it went in.
-    pub fn format(dt: DateTime, w: *Io.Writer) Io.Writer.Error!void {
-        // The sign is written by hand and the year is made unsigned, because
-        // Zig's `{d}` with a width prints a `+` in front of a non-negative
-        // *signed* integer -- so `{d:0>4}` of `2020` is `+2020`.
-        if (dt.year < 0) try w.writeByte('-');
-        try w.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-            @abs(dt.year), dt.month, dt.day, dt.hour, dt.minute, dt.second,
-        });
-        if (dt.fraction_digits > 0) {
-            try w.writeByte('.');
-            const digit_count = @min(dt.fraction_digits, 9);
-            var scale: u32 = 100_000_000;
-            for (0..digit_count) |_| {
-                try w.writeByte('0' + @as(u8, @intCast((dt.nanosecond / scale) % 10)));
-                scale /= 10;
-            }
-        }
-        switch (dt.zone) {
+    /// Reached by `{f}`. The date and time come from zig-datetime's
+    /// formatter; the zone is written here, because the difference between
+    /// `Z` and `+00:00` is this file's to keep and not something a date value
+    /// has an opinion about.
+    pub fn format(self: DateTime, w: *Io.Writer) Io.Writer.Error!void {
+        // The fraction's width is known only at run time and a format string
+        // is comptime, so this is a switch rather than a loop. `[T]` because
+        // a bare `T` in a format string is passed through as a literal only
+        // by accident of matching no sequence; bracketing says so.
+        const wrote = switch (@min(self.fraction_digits, 9)) {
+            0 => self.value.format("YYYY-MM-DD[T]HH:mm:ss", w),
+            1 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.S", w),
+            2 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SS", w),
+            3 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSS", w),
+            4 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSS", w),
+            5 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSSS", w),
+            6 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSSSS", w),
+            7 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSSSSS", w),
+            8 => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSSSSSS", w),
+            else => self.value.format("YYYY-MM-DD[T]HH:mm:ss.SSSSSSSSS", w),
+        };
+        wrote catch return error.WriteFailed;
+
+        switch (self.zone) {
             .utc => try w.writeByte('Z'),
             .none => {},
-            .offset => {
-                const negative = dt.offset_minutes < 0;
-                const total: u32 = @abs(dt.offset_minutes);
-                try w.print("{c}{d:0>2}:{d:0>2}", .{
-                    @as(u8, if (negative) '-' else '+'),
-                    total / 60,
-                    total % 60,
-                });
-            },
+            .offset => self.value.format("Z", w) catch return error.WriteFailed,
         }
     }
 
@@ -265,63 +213,50 @@ pub const DateTime = struct {
         NoZone,
     };
 
-    /// The instant this names, as nanoseconds since 1970-01-01T00:00:00Z.
+    /// The instant this names.
     ///
-    /// Negative for a date before 1970. A leap second — `second == 60` —
-    /// lands on the first instant of the following minute, since the
-    /// alternative is a leap-second table that needs maintaining.
-    pub fn toUnixNanoseconds(dt: DateTime) InstantError!i128 {
-        if (dt.zone == .none) return error.NoZone;
-        const days = daysFromCivil(dt.year, dt.month, dt.day);
-        const seconds = days * std.time.s_per_day +
-            @as(i64, dt.hour) * 3600 +
-            @as(i64, dt.minute) * 60 +
-            @as(i64, dt.second) -
-            @as(i64, dt.offset_minutes) * 60;
-        return @as(i128, seconds) * std.time.ns_per_s + dt.nanosecond;
+    /// A leap second — `second == 60` — lands on the first instant of the
+    /// following minute, since the alternative is a leap-second table that
+    /// needs maintaining.
+    pub fn toInstant(self: DateTime) InstantError!Instant {
+        if (self.zone == .none) return error.NoZone;
+        return self.value.toInstant();
+    }
+
+    /// Nanoseconds since 1970-01-01T00:00:00Z, negative before it.
+    pub fn toUnixNanoseconds(self: DateTime) InstantError!i128 {
+        return (try self.toInstant()).timestamp;
     }
 
     /// Seconds since 1970, discarding the fraction towards negative infinity.
-    pub fn toUnixSeconds(dt: DateTime) InstantError!i64 {
-        return @intCast(@divFloor(try dt.toUnixNanoseconds(), std.time.ns_per_s));
+    pub fn toUnixSeconds(self: DateTime) InstantError!i64 {
+        return @intCast(@divFloor(try self.toUnixNanoseconds(), std.time.ns_per_s));
     }
 
     pub const FromInstantError = error{
         /// The instant is outside the years `format` can write, which is
-        /// 0 to 9999.
+        /// `min_year` to `max_year`.
         DateOutOfRange,
     };
 
-    /// The UTC date and time at `nanoseconds` after 1970.
+    /// The UTC date and time at `instant`.
     ///
     /// `fraction_digits` comes out as 9 when there is a fraction and 0 when
     /// there is not, so that a date made this way and written is exact rather
     /// than rounded to the second.
-    pub fn fromUnixNanoseconds(nanoseconds: i128) FromInstantError!DateTime {
-        // `@divFloor` and `@mod` rather than a subtraction, because
-        // `seconds - days * 86400` overflows one day below the bottom of the
-        // range while the modulus does not.
-        const seconds: i64 = @intCast(@divFloor(nanoseconds, std.time.ns_per_s));
-        const nanosecond: u32 = @intCast(@mod(nanoseconds, std.time.ns_per_s));
-
-        const days = @divFloor(seconds, std.time.s_per_day);
-        const day_seconds: u64 = @intCast(@mod(seconds, std.time.s_per_day));
-
-        const civil = civilFromDays(days);
-        if (civil.year < 0 or civil.year > 9999) return error.DateOutOfRange;
-
+    pub fn fromInstant(instant: Instant) FromInstantError!DateTime {
+        const value = instant.asDateTime();
+        if (value.year < min_year or value.year > max_year) return error.DateOutOfRange;
         return .{
-            .year = @intCast(civil.year),
-            .month = civil.month,
-            .day = civil.day,
-            .hour = @intCast(day_seconds / 3600),
-            .minute = @intCast((day_seconds % 3600) / 60),
-            .second = @intCast(day_seconds % 60),
-            .nanosecond = nanosecond,
-            .fraction_digits = if (nanosecond == 0) 0 else 9,
-            .offset_minutes = 0,
+            .value = value,
+            .fraction_digits = if (value.nanosecond == 0) 0 else 9,
             .zone = .utc,
         };
+    }
+
+    /// The UTC date and time at `nanoseconds` after 1970.
+    pub fn fromUnixNanoseconds(nanoseconds: i128) FromInstantError!DateTime {
+        return fromInstant(.fromNanoTimeStamp(nanoseconds));
     }
 
     /// Whether two dates name the same instant, whatever notation each is
@@ -330,8 +265,8 @@ pub const DateTime = struct {
     ///
     /// **False when either date has no zone**, even for a date compared with
     /// itself, because a date with no zone names no instant — which is what
-    /// `toUnixNanoseconds` refuses to guess at. Check `zone` first if that
-    /// matters; `sameText` is the reflexive comparison.
+    /// `toInstant` refuses to guess at. Check `zone` first if that matters;
+    /// `sameText` is the reflexive comparison.
     pub fn sameInstant(a: DateTime, b: DateTime) bool {
         const an = a.toUnixNanoseconds() catch return false;
         const bn = b.toUnixNanoseconds() catch return false;
@@ -339,90 +274,69 @@ pub const DateTime = struct {
     }
 
     /// Exactly the same notation: every field, the width of the fraction and
-    /// the spelling of the zone. This is what a round-trip test asserts,
-    /// since `sameInstant` would pass while the file was being rewritten into
-    /// a different notation each time.
+    /// the spelling of the zone.
+    ///
+    /// This is what a round-trip test asserts, since `sameInstant` would
+    /// pass while the file was being rewritten into a different notation
+    /// every time a tool touched it.
+    ///
+    /// `value.weekday` and `value.designation` are not compared: the first is
+    /// derived from the date and the second is a zone's name for itself,
+    /// which no playlist carries.
     pub fn sameText(a: DateTime, b: DateTime) bool {
-        return std.meta.eql(a, b);
+        return a.fraction_digits == b.fraction_digits and
+            a.zone == b.zone and
+            a.value.year == b.value.year and
+            a.value.month == b.value.month and
+            a.value.day == b.value.day and
+            a.value.hour == b.value.hour and
+            a.value.minute == b.value.minute and
+            a.value.second == b.value.second and
+            a.value.nanosecond == b.value.nanosecond and
+            a.value.offset == b.value.offset;
+    }
+
+    /// Whether two dates are the same in every way a playlist can express,
+    /// which is `sameText`.
+    ///
+    /// Named `eql` so that `Playlist.eql`'s deep comparison finds it and
+    /// uses it, rather than reflecting over `value`'s fields and comparing
+    /// two it should not: `weekday`, which is derived from the date, and
+    /// `designation`, which is a zone's name for itself and which no
+    /// playlist carries.
+    pub fn eql(a: DateTime, b: DateTime) bool {
+        return a.sameText(b);
+    }
+
+    /// The offset from UTC in whole minutes, which is the only shape a
+    /// playlist's offset comes in. Truncates towards zero for the
+    /// historical offsets that are not whole minutes and that no playlist
+    /// has.
+    pub fn offsetMinutes(self: DateTime) i32 {
+        return @divTrunc(self.value.offset, 60);
     }
 };
 
-/// A date with no time on it, which is what the calendar algorithms deal in.
-pub const Civil = struct {
-    year: i64,
-    month: u8,
-    day: u8,
-};
-
-/// Howard Hinnant's `days_from_civil`: the number of days from 1970-01-01 to
-/// the given proleptic Gregorian date, negative before that.
+/// How many digits the fraction of a second in `text` was written with,
+/// capped at the nine that fit a nanosecond count.
 ///
-/// Exact for every year that fits the arithmetic. `era * 146097` is where it
-/// would overflow, so a year beyond about 63 trillion is out of reach — far
-/// outside anything `DateTime` accepts, and worth saying because the same
-/// function with an `i32` era would break inside the range of a file's mtime.
-pub fn daysFromCivil(year: i64, month: u8, day: u8) i64 {
-    // March is treated as the first month, which is what puts the leap day
-    // at the end of the year and makes the rest of this arithmetic exact.
-    const y = year - @as(i64, @intFromBool(month <= 2));
-    const era = @divFloor(y, 400);
-    const year_of_era: u64 = @intCast(y - era * 400); // 0 to 399
-    const shifted_month: u64 = if (month > 2) @as(u64, month) - 3 else @as(u64, month) + 9;
-    const day_of_year = (153 * shifted_month + 2) / 5 + day - 1; // 0 to 365
-    const day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    return era * 146097 + @as(i64, @intCast(day_of_era)) - 719468;
-}
-
-/// Howard Hinnant's `civil_from_days`, the inverse of `daysFromCivil`.
+/// Read off the text rather than off the parse, because
+/// `iso8601.ParseResult` does not report it — reasonably, since `.03` and
+/// `.030` are the same date. Here they are two spellings that both have to
+/// survive being written back out.
 ///
-/// Exact for any day count reachable from an `i64` second count, which is
-/// where the widths matter: the year it returns can be outside an `i32`, so
-/// a caller that wants one has to check rather than cast.
-pub fn civilFromDays(days: i64) Civil {
-    const z = days + 719468;
-    const era = @divFloor(z, 146097);
-    const day_of_era: u64 = @intCast(z - era * 146097); // 0 to 146096
-    const year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 -
-        day_of_era / 146096) / 365; // 0 to 399
-    const day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    const shifted_month = (5 * day_of_year + 2) / 153; // 0 to 11
-    const day = day_of_year - (153 * shifted_month + 2) / 5 + 1; // 1 to 31
-    const month = if (shifted_month < 10) shifted_month + 3 else shifted_month - 9;
-    return .{
-        .year = @as(i64, @intCast(year_of_era)) + era * 400 + @intFromBool(month <= 2),
-        .month = @intCast(month),
-        .day = @intCast(day),
-    };
-}
-
-/// Whether `year` is a leap year in the proleptic Gregorian calendar.
-pub fn isLeapYear(year: i32) bool {
-    if (@mod(year, 4) != 0) return false;
-    if (@mod(year, 100) != 0) return true;
-    return @mod(year, 400) == 0;
-}
-
-/// How many days `month` has in `year`. Zero for a month outside 1 to 12,
-/// so that a range check written as `day > daysInMonth(...)` catches a bad
-/// month as well as a bad day.
-pub fn daysInMonth(year: i32, month: u8) u8 {
-    return switch (month) {
-        1, 3, 5, 7, 8, 10, 12 => 31,
-        4, 6, 9, 11 => 30,
-        2 => if (isLeapYear(year)) 29 else 28,
-        else => 0,
-    };
-}
-
-/// Read exactly `text.len` decimal digits. Wide on purpose: the result is
-/// range-checked by the caller and narrowed afterwards, never before.
-fn digits(text: []const u8) error{InvalidDateTime}!u64 {
-    var value: u64 = 0;
-    for (text) |c| {
-        if (c < '0' or c > '9') return error.InvalidDateTime;
-        value = value * 10 + (c - '0');
+/// A valid ISO 8601 date and time has at most one decimal separator, and it
+/// is the only `.` or `,` in the whole thing, so finding it needs no
+/// knowledge of where the fields are.
+fn fractionDigits(text: []const u8) u8 {
+    const at = std.mem.findAny(u8, text, ".,") orelse return 0;
+    var count: u8 = 0;
+    for (text[at + 1 ..]) |c| {
+        if (c < '0' or c > '9') break;
+        count += 1;
+        if (count == 9) break;
     }
-    return value;
+    return count;
 }
 
 // -- tests -----------------------------------------------------------------
@@ -431,27 +345,32 @@ const testing = std.testing;
 
 /// Parse, write, and give back what was written, for the tests below.
 fn roundTrip(text: []const u8, buffer: []u8) ![]const u8 {
-    const dt = try DateTime.parse(text);
+    const parsed = try DateTime.parse(text);
     var w: Io.Writer = .fixed(buffer);
-    try w.print("{f}", .{dt});
+    try w.print("{f}", .{parsed});
     return w.buffered();
 }
 
 test "the example from RFC 8216" {
-    const dt = try DateTime.parse("2010-02-19T14:54:23.031+08:00");
-    try testing.expectEqual(@as(i32, 2010), dt.year);
-    try testing.expectEqual(@as(u8, 2), dt.month);
-    try testing.expectEqual(@as(u8, 19), dt.day);
-    try testing.expectEqual(@as(u8, 14), dt.hour);
-    try testing.expectEqual(@as(u8, 54), dt.minute);
-    try testing.expectEqual(@as(u8, 23), dt.second);
-    try testing.expectEqual(@as(u32, 31_000_000), dt.nanosecond);
-    try testing.expectEqual(@as(u8, 3), dt.fraction_digits);
-    try testing.expectEqual(@as(i16, 480), dt.offset_minutes);
-    try testing.expectEqual(DateTime.Zone.offset, dt.zone);
+    const parsed = try DateTime.parse("2010-02-19T14:54:23.031+08:00");
+    try testing.expectEqual(@as(datetime.Year, 2010), parsed.value.year);
+    try testing.expectEqual(Month.Feb, parsed.value.month);
+    try testing.expectEqual(@as(datetime.Day, 19), parsed.value.day);
+    try testing.expectEqual(@as(datetime.Hour, 14), parsed.value.hour);
+    try testing.expectEqual(@as(datetime.Minute, 54), parsed.value.minute);
+    try testing.expectEqual(@as(datetime.Second, 23), parsed.value.second);
+    try testing.expectEqual(@as(datetime.Nanosecond, 31_000_000), parsed.value.nanosecond);
+    try testing.expectEqual(@as(u8, 3), parsed.fraction_digits);
+    // zig-datetime keeps the offset in seconds; eight hours is 28800.
+    try testing.expectEqual(@as(i32, 28800), parsed.value.offset);
+    try testing.expectEqual(@as(i32, 480), parsed.offsetMinutes());
+    try testing.expectEqual(DateTime.Zone.offset, parsed.zone);
 
     var buffer: [64]u8 = undefined;
-    try testing.expectEqualStrings("2010-02-19T14:54:23.031+08:00", try roundTrip("2010-02-19T14:54:23.031+08:00", &buffer));
+    try testing.expectEqualStrings(
+        "2010-02-19T14:54:23.031+08:00",
+        try roundTrip("2010-02-19T14:54:23.031+08:00", &buffer),
+    );
 }
 
 test "the notation is preserved, not normalised" {
@@ -460,7 +379,7 @@ test "the notation is preserved, not normalised" {
     // both come back as they went in.
     try testing.expectEqualStrings("2020-01-01T00:00:00Z", try roundTrip("2020-01-01T00:00:00Z", &buffer));
     try testing.expectEqualStrings("2020-01-01T00:00:00.000Z", try roundTrip("2020-01-01T00:00:00.000Z", &buffer));
-    // `+00:00` means the same instant as `Z` and is not the same notation.
+    // `+00:00` names the same instant as `Z` and is not the same notation.
     try testing.expectEqualStrings("2020-01-01T00:00:00+00:00", try roundTrip("2020-01-01T00:00:00+00:00", &buffer));
 }
 
@@ -473,26 +392,40 @@ test "the lenient spellings are accepted and then written canonically" {
     // An offset with no colon, and one with no minutes.
     try testing.expectEqualStrings("2020-01-01T00:00:00-05:30", try roundTrip("2020-01-01T00:00:00-0530", &buffer));
     try testing.expectEqualStrings("2020-01-01T00:00:00+02:00", try roundTrip("2020-01-01T00:00:00+02", &buffer));
+    // The basic form, and a week date: both name a calendar date, and that
+    // is what comes back.
+    try testing.expectEqualStrings("2020-01-01T00:00:00Z", try roundTrip("20200101T000000Z", &buffer));
+    try testing.expectEqualStrings("2019-12-30T00:00:00Z", try roundTrip("2020-W01-1T00:00:00Z", &buffer));
+}
+
+test "writing what was written in another notation is still a fixed point" {
+    // The round trip settles even where it does not preserve: a week date
+    // comes back as a calendar date, and stays one.
+    var once: [64]u8 = undefined;
+    var twice: [64]u8 = undefined;
+    const first = try roundTrip("2020-W01-1T00:00:00Z", &once);
+    try testing.expectEqualStrings(first, try roundTrip(first, &twice));
 }
 
 test "no zone is a zone of its own, and has no instant" {
-    const dt = try DateTime.parse("2020-01-01T00:00:00");
-    try testing.expectEqual(DateTime.Zone.none, dt.zone);
-    try testing.expectError(error.NoZone, dt.toUnixNanoseconds());
+    const parsed = try DateTime.parse("2020-01-01T00:00:00");
+    try testing.expectEqual(DateTime.Zone.none, parsed.zone);
+    try testing.expectError(error.NoZone, parsed.toInstant());
+    try testing.expectError(error.NoZone, parsed.toUnixNanoseconds());
 
     var buffer: [64]u8 = undefined;
     try testing.expectEqualStrings("2020-01-01T00:00:00", try roundTrip("2020-01-01T00:00:00", &buffer));
 }
 
 test "a fraction wider than nanoseconds is truncated" {
-    const dt = try DateTime.parse("2020-01-01T00:00:00.1234567891234Z");
-    try testing.expectEqual(@as(u32, 123_456_789), dt.nanosecond);
-    try testing.expectEqual(@as(u8, 9), dt.fraction_digits);
+    const parsed = try DateTime.parse("2020-01-01T00:00:00.1234567891234Z");
+    try testing.expectEqual(@as(datetime.Nanosecond, 123_456_789), parsed.value.nanosecond);
+    try testing.expectEqual(@as(u8, 9), parsed.fraction_digits);
 
     var buffer: [64]u8 = undefined;
     // Written with the nine digits that were kept, which is the one place
-    // the notation is not preserved -- and it is stable, so a second
-    // round trip changes nothing.
+    // the notation is not preserved -- and it is stable, so a second round
+    // trip changes nothing.
     try testing.expectEqualStrings(
         "2020-01-01T00:00:00.123456789Z",
         try roundTrip("2020-01-01T00:00:00.1234567891234Z", &buffer),
@@ -508,33 +441,77 @@ test "what is not a date" {
     // Fields of the wrong width.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-2-19T14:54:23Z"));
     try testing.expectError(error.InvalidDateTime, DateTime.parse("210-02-19T14:54:23Z"));
-    // Truncated.
+    // Truncated, and -- the case this file refuses on RFC 8216's behalf
+    // rather than zig-datetime's -- a date with no time on it, which would
+    // otherwise be read as midnight.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19"));
+    try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02"));
+    try testing.expectError(error.InvalidDateTime, DateTime.parse("2010"));
     try testing.expectError(error.InvalidDateTime, DateTime.parse(""));
-    // Wrong separators.
+    // Wrong separators. `2010/02/19...` parses as the year 2010 and then
+    // stops, which the trailing-text check refuses; `14-54-23` is read as
+    // fields that are out of range rather than as a shape that is not a
+    // date, so it comes back as the other error. Either way it is refused,
+    // which is what a caller cares about.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010/02/19T14:54:23Z"));
-    try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19T14-54-23Z"));
+    try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-02-19T14-54-23Z"));
     // A fraction with no digits.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19T14:54:23.Z"));
-    // Trailing rubbish, which must not parse to the date without it.
+    // Trailing rubbish, which must not parse to the date without it -- the
+    // other thing refused here, since zig-datetime parses a prefix.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19T14:54:23Zx"));
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19T14:54:23+08:00 "));
-    // A zone that is not one.
     try testing.expectError(error.InvalidDateTime, DateTime.parse("2010-02-19T14:54:23X"));
 }
 
 test "fields that are numbers and still wrong" {
-    // The month check has to come before the narrowing cast, or this panics
-    // instead of failing.
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-99-01T00:00:00Z"));
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-00-01T00:00:00Z"));
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-02-30T00:00:00Z"));
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-00T00:00:00Z"));
-    try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-01T24:00:00Z"));
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-01T00:60:00Z"));
-    try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-01T00:00:61Z"));
+    // An offset of more than a day, either way round.
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-01T00:00:00+24:00"));
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2010-01-01T00:00:00+00:60"));
+}
+
+test "the forms ISO 8601 allows that are not the one the examples use" {
+    // All of these are legal ISO 8601, all of them are accepted, and all of
+    // them come back written the one way `format` writes -- which names the
+    // same instant, so the round trip settles even where it does not
+    // preserve. Worth a test because each one would otherwise look like a
+    // bug the first time a playlist in the wild used it.
+    var buffer: [64]u8 = undefined;
+
+    // An hour of 24 is midnight at the *end* of the day, and is not an hour
+    // out of range: it means the same instant as 00:00 the next morning.
+    try testing.expectEqualStrings(
+        "2010-01-02T00:00:00Z",
+        try roundTrip("2010-01-01T24:00:00Z", &buffer),
+    );
+
+    // An ordinal date: the second day of 2010.
+    try testing.expectEqualStrings(
+        "2010-01-02T00:00:00Z",
+        try roundTrip("2010-002T00:00:00Z", &buffer),
+    );
+
+    // A week date, and the basic form with no separators.
+    try testing.expectEqualStrings(
+        "2019-12-30T00:00:00Z",
+        try roundTrip("2020-W01-1T00:00:00Z", &buffer),
+    );
+    try testing.expectEqualStrings(
+        "2020-01-01T00:00:00Z",
+        try roundTrip("20200101T000000Z", &buffer),
+    );
+
+    // A comma for the decimal separator, which is the form ISO 8601 lists
+    // first and which almost nothing writes.
+    try testing.expectEqualStrings(
+        "2020-01-01T00:00:00.25Z",
+        try roundTrip("2020-01-01T00:00:00,25Z", &buffer),
+    );
 }
 
 test "February the twenty-ninth, when there is one" {
@@ -543,12 +520,15 @@ test "February the twenty-ninth, when there is one" {
     try testing.expectError(error.DateOutOfRange, DateTime.parse("2021-02-29T00:00:00Z"));
     // 1900 is divisible by 4 and by 100 and not by 400.
     try testing.expectError(error.DateOutOfRange, DateTime.parse("1900-02-29T00:00:00Z"));
+    // ...which `Month.lastDay` is what `validate` asks about.
+    try testing.expectEqual(@as(datetime.Day, 29), Month.Feb.lastDay(2020));
+    try testing.expectEqual(@as(datetime.Day, 28), Month.Feb.lastDay(1900));
 }
 
 test "a leap second is accepted and lands on the next minute" {
-    const dt = try DateTime.parse("2016-12-31T23:59:60Z");
-    try testing.expectEqual(@as(u8, 60), dt.second);
-    const at = try dt.toUnixNanoseconds();
+    const parsed = try DateTime.parse("2016-12-31T23:59:60Z");
+    try testing.expectEqual(@as(datetime.Second, 60), parsed.value.second);
+    const at = try parsed.toUnixNanoseconds();
     const next = try (try DateTime.parse("2017-01-01T00:00:00Z")).toUnixNanoseconds();
     try testing.expectEqual(next, at);
 }
@@ -566,7 +546,7 @@ test "instants, in both directions" {
         .sameText(try DateTime.parse("2010-02-19T06:54:23.031Z")));
 
     // Before 1970, which is the case `std.time.epoch` cannot represent at
-    // all and the reason this file exists.
+    // all and half the reason this file exists.
     const apollo = try DateTime.parse("1969-07-20T20:17:40Z");
     try testing.expectEqual(@as(i64, -14182940), try apollo.toUnixSeconds());
     const back = try DateTime.fromUnixNanoseconds(try apollo.toUnixNanoseconds());
@@ -574,83 +554,88 @@ test "instants, in both directions" {
 }
 
 test "every day of four centuries survives the calendar round trip" {
-    // 1900 to 2300, which covers both kinds of century: one that is a leap
-    // year and one that is not.
-    var day = daysFromCivil(1900, 1, 1);
-    const last = daysFromCivil(2300, 1, 1);
-    var expected: Civil = .{ .year = 1900, .month = 1, .day = 1 };
+    // 1900 to 2300, which covers both kinds of century: one whose hundredth
+    // year is a leap year and one whose is not. The calendar is
+    // zig-datetime's; this is here because the dates a playlist carries are
+    // the ones that matter, and a library swap that broke the calendar would
+    // otherwise show up as a puzzling failure somewhere else.
+    var day = (datetime.Date{ .year = 1900, .month = .Jan, .day = 1 }).toDaysSinceStartOfEra();
+    const last = (datetime.Date{ .year = 2300, .month = .Jan, .day = 1 }).toDaysSinceStartOfEra();
+    var expected: datetime.Date = .{ .year = 1900, .month = .Jan, .day = 1 };
     while (day < last) : (day += 1) {
-        const civil = civilFromDays(day);
-        try testing.expectEqual(expected.year, civil.year);
-        try testing.expectEqual(expected.month, civil.month);
-        try testing.expectEqual(expected.day, civil.day);
-        try testing.expectEqual(day, daysFromCivil(civil.year, civil.month, civil.day));
+        const date: datetime.Date = .fromDaysSinceStartOfEra(day);
+        try testing.expectEqual(expected.year, date.year);
+        try testing.expectEqual(expected.month, date.month);
+        try testing.expectEqual(expected.day, date.day);
+        try testing.expectEqual(day, date.toDaysSinceStartOfEra());
 
         expected.day += 1;
-        if (expected.day > daysInMonth(@intCast(expected.year), expected.month)) {
+        if (expected.day > expected.month.lastDay(expected.year)) {
             expected.day = 1;
-            expected.month += 1;
-            if (expected.month > 12) {
-                expected.month = 1;
+            if (expected.month == .Dec) {
+                expected.month = .Jan;
                 expected.year += 1;
+            } else {
+                expected.month = expected.month.next();
             }
         }
     }
 }
 
-test "the calendar is exact outside the years a DateTime can hold" {
-    // `civilFromDays` returns an `i64` year on purpose: this is the range a
-    // caller has to check rather than cast.
-    try testing.expectEqual(@as(i64, -1), civilFromDays(daysFromCivil(-1, 3, 1)).year);
-    try testing.expectEqual(@as(i64, 100000), civilFromDays(daysFromCivil(100000, 1, 1)).year);
-    // And a `DateTime` refuses what it cannot write.
+test "an instant outside the years a playlist can write is refused" {
+    // `format` writes four digits, so a date it could not write back is not
+    // one to hand out.
+    const year_10000 = (datetime.Date{ .year = 10000, .month = .Jan, .day = 1 })
+        .toDaysSinceStartOfEra();
+    _ = year_10000;
     try testing.expectError(
         error.DateOutOfRange,
-        DateTime.fromUnixNanoseconds(@as(i128, daysFromCivil(10000, 1, 1)) * std.time.s_per_day * std.time.ns_per_s),
+        DateTime.fromUnixNanoseconds(@as(i128, 253_402_300_800) * std.time.ns_per_s),
     );
+    // And one inside them is not.
+    _ = try DateTime.fromUnixNanoseconds(0);
 }
 
-test "fromUnixNanoseconds floors rather than truncating" {
+test "fromInstant floors rather than truncating" {
     // Half a second before the epoch is 1969, not 1970 with a negative
-    // fraction. `@mod` rather than a remainder is what makes this true.
-    const dt = try DateTime.fromUnixNanoseconds(-500_000_000);
-    try testing.expectEqual(@as(i32, 1969), dt.year);
-    try testing.expectEqual(@as(u8, 12), dt.month);
-    try testing.expectEqual(@as(u8, 31), dt.day);
-    try testing.expectEqual(@as(u8, 23), dt.hour);
-    try testing.expectEqual(@as(u8, 59), dt.minute);
-    try testing.expectEqual(@as(u8, 59), dt.second);
-    try testing.expectEqual(@as(u32, 500_000_000), dt.nanosecond);
+    // fraction.
+    const parsed = try DateTime.fromUnixNanoseconds(-500_000_000);
+    try testing.expectEqual(@as(datetime.Year, 1969), parsed.value.year);
+    try testing.expectEqual(Month.Dec, parsed.value.month);
+    try testing.expectEqual(@as(datetime.Day, 31), parsed.value.day);
+    try testing.expectEqual(@as(datetime.Hour, 23), parsed.value.hour);
+    try testing.expectEqual(@as(datetime.Minute, 59), parsed.value.minute);
+    try testing.expectEqual(@as(datetime.Second, 59), parsed.value.second);
+    try testing.expectEqual(@as(datetime.Nanosecond, 500_000_000), parsed.value.nanosecond);
 }
 
 test "validate refuses what format could not write back" {
+    // The thirtieth of February, which the types cannot rule out.
     try testing.expectError(error.DateOutOfRange, (DateTime{
-        .year = 2020,
-        .month = 13,
-        .day = 1,
-        .hour = 0,
-        .minute = 0,
-        .second = 0,
+        .value = .{ .year = 2020, .month = .Feb, .day = 30 },
     }).validate());
-    // `Z` with a non-zero offset is a contradiction.
+    // `Z` with a non-zero offset is a contradiction between this file's
+    // `zone` and zig-datetime's `offset`.
     try testing.expectError(error.DateOutOfRange, (DateTime{
-        .year = 2020,
-        .month = 1,
-        .day = 1,
-        .hour = 0,
-        .minute = 0,
-        .second = 0,
-        .offset_minutes = 60,
+        .value = .{ .year = 2020, .month = .Jan, .day = 1, .offset = 3600 },
         .zone = .utc,
     }).validate());
     try (DateTime{
-        .year = 2020,
-        .month = 1,
-        .day = 1,
-        .hour = 0,
-        .minute = 0,
-        .second = 0,
-        .offset_minutes = 60,
+        .value = .{ .year = 2020, .month = .Jan, .day = 1, .offset = 3600 },
         .zone = .offset,
     }).validate();
+    // A year `format` writes with four digits and `parse` would not read.
+    try testing.expectError(error.DateOutOfRange, (DateTime{
+        .value = .{ .year = 12345, .month = .Jan, .day = 1 },
+    }).validate());
+}
+
+test "counting the digits of a fraction" {
+    try testing.expectEqual(@as(u8, 0), fractionDigits("2020-01-01T00:00:00Z"));
+    try testing.expectEqual(@as(u8, 3), fractionDigits("2020-01-01T00:00:00.031Z"));
+    try testing.expectEqual(@as(u8, 1), fractionDigits("2020-01-01T00:00:00.5"));
+    // Capped at the nine that fit a nanosecond count.
+    try testing.expectEqual(@as(u8, 9), fractionDigits("2020-01-01T00:00:00.1234567891234Z"));
+    // ISO 8601 lets the comma be the decimal separator.
+    try testing.expectEqual(@as(u8, 2), fractionDigits("2020-01-01T00:00:00,25Z"));
 }

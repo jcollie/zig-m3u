@@ -1813,7 +1813,7 @@ test "a daterange, with its dates and its client attributes" {
             "DURATION=30.5,X-AD-ID=\"1234\",X-PRICE=9.99,SCTE35-OUT=0xFC002F",
     );
     try testing.expectEqualStrings("ad1", range.id);
-    try testing.expectEqual(@as(i32, 2010), range.start_date.?.year);
+    try testing.expectEqual(@as(i32, 2010), range.start_date.?.value.year);
     try testing.expectEqual(@as(f64, 30.5), range.duration.?);
     try testing.expectEqualStrings("0xFC002F", range.scte35_out.?);
     try testing.expectEqual(@as(usize, 2), range.client.len);

@@ -17,8 +17,14 @@ jobs:
       - name: Check REUSE compliance
         run: nix develop -c reuse lint
 
+      # `--exclude zig-pkg` because that is where the Zig package manager
+      # unpacks the dependencies, and their formatting is not this
+      # project's business. It is empty at this point in a fresh checkout,
+      # so the exclusion only matters to somebody running the same command
+      # locally after a build -- which is exactly when it would otherwise
+      # report a few thousand files of generated Win32 bindings.
       - name: Check Zig formatting compliance
-        run: nix develop -c zig fmt --check .
+        run: nix develop -c zig fmt --check --exclude zig-pkg .
 
       - name: Test
         run: nix develop -c zig build test --summary all

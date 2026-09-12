@@ -12,7 +12,9 @@ plain `.m3u` list of file names, the extended M3U that added `#EXTM3U` and
 `#EXTINF`, and HTTP Live Streaming as
 [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216) defines it — plus the tags
 added to HLS after that RFC was published: low-latency parts, delta updates,
-content steering, variable substitution.
+content steering, variable substitution. Its dependencies are
+[zig-uri][zig-uri] for the URIs a playlist is made of and
+[zig-datetime][zig-datetime] for the dates its tags carry.
 
 The API documentation is generated from the doc comments, which carry most of
 the explanation; `zig build docs` builds it and `zig build docs-serve` reads
@@ -212,11 +214,14 @@ Each is a file of its own, usable without the rest:
   hold commas, so the list cannot be split on the comma without knowing where
   the quotes are.
 - **`m3u.time`** — the ISO 8601 dates `#EXT-X-PROGRAM-DATE-TIME` and
-  `#EXT-X-DATERANGE` carry. Not `std.time.epoch`, which only decodes and
-  cannot represent a date before 1970 — a programme date certainly can. Howard
-  Hinnant's calendar algorithms instead, exact over the whole proleptic
-  Gregorian calendar in both directions, with a test that walks every day of
-  four centuries through them.
+  `#EXT-X-DATERANGE` carry. [zig-datetime][zig-datetime] does the grammar,
+  the calendar, the range checking and the instants; this is the thin layer
+  that adds the two things a *playlist* needs and a date value has no reason
+  to carry — how the offset was spelled, since `Z` and `+00:00` mean the same
+  instant and are not the same six characters, and how many digits the
+  fraction was written with, since `...:23Z`, `...:23.0Z` and `...:23.000Z`
+  are three spellings of one time. Without them a tool asked to change one
+  tag would rewrite every date in the file into a different notation.
 - **`m3u.tags`** — a type per tag, with the attribute tables that drive both
   reading and writing.
 
@@ -268,9 +273,22 @@ const m3u = b.dependency("m3u", .{ .target = target, .optimize = optimize });
 exe.root_module.addImport("m3u", m3u.module("m3u"));
 ```
 
-Its one dependency is [zig-uri][zig-uri], fetched by the Zig build system.
-Nothing else is needed to build the library; the flake's devshell is for the
-tooling around it.
+Two dependencies, both fetched by the Zig build system: [zig-uri][zig-uri]
+for the URIs and [zig-datetime][zig-datetime] for the dates. Nothing else is
+needed to build the library; the flake's devshell is for the tooling around
+it.
+
+`build.zig.zon.nix` is the same dependency set for Nix, which has no network,
+and is generated rather than written:
+
+```console
+$ nix develop -c zon2nix --16 --nix=build.zig.zon.nix build.zig.zon
+```
+
+Regenerating it is the whole of adding, removing or updating a dependency. It
+includes zig-datetime's *lazy* dependencies — the IANA timezone database, the
+Unicode CLDR — which nothing here asks for and which therefore cost the Nix
+build some download and nothing else.
 
 ## Building and testing
 
@@ -352,3 +370,4 @@ MIT. See `LICENSES/MIT.txt`. The project follows the
 [REUSE](https://reuse.software/) specification and `reuse lint` passes.
 
 [zig-uri]: https://git.jcollie.dev/jeff/zig-uri
+[zig-datetime]: https://git.jcollie.dev/jeff/zig-datetime

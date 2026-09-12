@@ -1609,11 +1609,25 @@ pub fn eql(a: *const Playlist, b: *const Playlist) bool {
 /// It is safe because the only floats in a playlist came from `signedFloat`,
 /// which refuses `nan` and `inf`, and are written back by `{d}` as the
 /// shortest decimal that reads as the same `f64`.
+///
+/// A struct or union with an `eql` of its own is compared with that instead
+/// of field by field, which is how a type says that some of its fields are
+/// not part of what it means. `time.DateTime` is the one that needs it: it
+/// wraps a zig-datetime value whose `weekday` is derived from the date and
+/// whose `designation` is a zone's name for itself, and neither is something
+/// a playlist carries or that two equal playlists must agree about.
 fn deepEql(comptime T: type, a: T, b: T) bool {
     return switch (@typeInfo(T)) {
         .void => true,
         .bool, .int, .float, .@"enum" => a == b,
         .optional => |info| if (a) |x| (if (b) |y| deepEql(info.child, x, y) else false) else b == null,
+        .array => |info| blk: {
+            if (info.child == u8) break :blk std.mem.eql(u8, &a, &b);
+            for (a, b) |x, y| {
+                if (!deepEql(info.child, x, y)) break :blk false;
+            }
+            break :blk true;
+        },
         .pointer => |info| switch (info.size) {
             .slice => blk: {
                 if (a.len != b.len) break :blk false;
@@ -1626,6 +1640,7 @@ fn deepEql(comptime T: type, a: T, b: T) bool {
             else => @compileError("no deep comparison for " ++ @typeName(T)),
         },
         .@"struct" => |info| blk: {
+            if (@hasDecl(T, "eql")) break :blk T.eql(a, b);
             inline for (info.fields) |field| {
                 if (!deepEql(field.type, @field(a, field.name), @field(b, field.name))) {
                     break :blk false;
@@ -1634,6 +1649,7 @@ fn deepEql(comptime T: type, a: T, b: T) bool {
             break :blk true;
         },
         .@"union" => |info| blk: {
+            if (@hasDecl(T, "eql")) break :blk T.eql(a, b);
             if (info.tag_type == null) @compileError("no deep comparison for " ++ @typeName(T));
             const Tag = std.meta.Tag(T);
             const tag = std.meta.activeTag(a);

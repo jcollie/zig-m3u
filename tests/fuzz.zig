@@ -429,16 +429,16 @@ fn dateProperty(input: []const u8) !void {
         const nanoseconds = try first.toUnixNanoseconds();
         const from_instant = DateTime.fromUnixNanoseconds(nanoseconds) catch return;
         try testing.expectEqual(nanoseconds, try from_instant.toUnixNanoseconds());
-        // The calendar is exact in both directions.
-        const days = m3u.time.daysFromCivil(
-            from_instant.year,
-            from_instant.month,
-            from_instant.day,
-        );
-        const civil = m3u.time.civilFromDays(days);
-        try testing.expectEqual(@as(i64, from_instant.year), civil.year);
-        try testing.expectEqual(from_instant.month, civil.month);
-        try testing.expectEqual(from_instant.day, civil.day);
+        // The calendar is exact in both directions. zig-datetime's, now,
+        // rather than this library's -- and still worth asserting here,
+        // because the dates a playlist carries are the ones that matter and
+        // a calendar that had gone wrong would otherwise surface as a
+        // puzzling failure somewhere else.
+        const date = from_instant.value.asDate();
+        const round_tripped: m3u.time.Date = .fromDaysSinceStartOfEra(date.toDaysSinceStartOfEra());
+        try testing.expectEqual(date.year, round_tripped.year);
+        try testing.expectEqual(date.month, round_tripped.month);
+        try testing.expectEqual(date.day, round_tripped.day);
     }
 }
 
@@ -462,16 +462,18 @@ test "fuzz instants" {
 fn fuzzInstant(_: void, smith: *Smith) !void {
     const DateTime = m3u.time.DateTime;
     const seconds = smith.value(i64);
-    const dt = DateTime.fromUnixNanoseconds(
+    const parsed = DateTime.fromUnixNanoseconds(
         @as(i128, seconds) * std.time.ns_per_s,
     ) catch return;
-    try dt.validate();
-    try testing.expectEqual(seconds, try dt.toUnixSeconds());
+    // Anything it hands out must be something `validate` accepts and
+    // `format` can write back, or the two halves disagree.
+    try parsed.validate();
+    try testing.expectEqual(seconds, try parsed.toUnixSeconds());
 
     var buffer: [64]u8 = undefined;
     var w: Io.Writer = .fixed(&buffer);
-    try w.print("{f}", .{dt});
-    try testing.expect(dt.sameText(try DateTime.parse(w.buffered())));
+    try w.print("{f}", .{parsed});
+    try testing.expect(parsed.sameText(try DateTime.parse(w.buffered())));
 }
 
 // -- byte ranges -----------------------------------------------------------

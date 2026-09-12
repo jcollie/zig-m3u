@@ -376,8 +376,8 @@ test "RFC 8216 §8.10, SCTE-35 date ranges" {
     try testing.expectEqual(@as(?f64, null), out.duration);
     try testing.expect(std.mem.startsWith(u8, out.scte35_out.?, "0xFC002F"));
     // The date is kept as written, and the instant is derivable from it.
-    try testing.expectEqual(@as(i32, 2014), out.start_date.?.year);
-    try testing.expectEqual(@as(u8, 11), out.start_date.?.hour);
+    try testing.expectEqual(@as(i32, 2014), out.start_date.?.value.year);
+    try testing.expectEqual(@as(u8, 11), out.start_date.?.value.hour);
     try testing.expectEqual(
         @as(i64, 1394018100),
         try out.start_date.?.toUnixSeconds(),
@@ -572,7 +572,7 @@ test "fragmented MP4, with an initialisation section that changes" {
     );
 
     try testing.expect(media.entries[2].discontinuity);
-    try testing.expectEqual(@as(i32, 2026), media.entries[0].program_date_time.?.year);
+    try testing.expectEqual(@as(i32, 2026), media.entries[0].program_date_time.?.value.year);
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
 }
 
@@ -792,8 +792,8 @@ test "date ranges, gaps and a bitrate" {
 
     // The programme date and the bitrate belong to the first segment.
     const first = media.entries[0];
-    try testing.expectEqual(@as(i32, 2010), first.program_date_time.?.year);
-    try testing.expectEqual(@as(i16, 480), first.program_date_time.?.offset_minutes);
+    try testing.expectEqual(@as(i32, 2010), first.program_date_time.?.value.year);
+    try testing.expectEqual(@as(i16, 480), first.program_date_time.?.offsetMinutes());
     try testing.expectEqual(@as(?u64, 2000000), first.bitrate);
 
     try testing.expect(media.entries[1].gap);
