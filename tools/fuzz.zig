@@ -3,19 +3,13 @@
 
 //! Run the fuzz targets in `tests/fuzz.zig` against input this makes up.
 //!
-//! Zig has a fuzzer of its own and those targets are written for it, so the
-//! obvious thing to run is `zig build fuzz --fuzz`. With the devshell's
-//! patched Zig that now *compiles* — `flake.nix` says what the patch is —
-//! and then ends with
-//!
-//! ```
-//! error: step 'run test': corrupted coverage file: pcs_len was zero
-//! ```
-//!
-//! because nothing in 0.16.0 populates the table of program counters, however
-//! the modules are built. A fuzzer with no coverage is a random number
-//! generator, so this is one written down honestly: it makes an input, hands
-//! it to a target, and says so when one comes back with an error.
+//! Zig has a fuzzer of its own and those targets are written for it: `zig
+//! build fuzz --fuzz` steers by coverage, and is the one to run when looking
+//! for something. This is the other way in. It has no coverage feedback, so
+//! it searches less well, but a fixed count of inputs from a fixed seed is
+//! the same run on every machine, which is what a workflow wants, and a
+//! finding is written out with the input that caused it. It makes an input,
+//! hands it to a target, and says so when one comes back with an error.
 //!
 //! ```console
 //! $ zig build fuzz-run                                     # a minute of each

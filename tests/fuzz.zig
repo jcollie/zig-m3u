@@ -24,10 +24,8 @@
 //! it runs the seeds beside it, so `zig build test` exercises the same
 //! properties on input that has already been interesting once.
 //!
-//! Note that Zig 0.16.0 cannot build a test executable in fuzz mode without a
-//! patched standard library, and leaves the fuzzer's coverage table empty even
-//! then; the flake in this repository says more, and `tools/fuzz.zig` is the
-//! loop that stands in for it. The properties are worth having either way.
+//! `zig build fuzz --fuzz` hands them to Zig's fuzzer, and `zig build
+//! fuzz-run` to the loop in `tools/fuzz.zig`.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -241,7 +239,7 @@ const substitute_seeds = [_][]const u8{
     "no substitutions here",
     "{$a",
     "$ {a}",
-    "{$" ++ "a" ** 200 ++ "}",
+    "{$" ++ @as([200]u8, @splat('a')) ++ "}",
 };
 
 /// Substitution terminates and is deterministic.
@@ -318,8 +316,8 @@ const attribute_seeds = [_][]const u8{
     "TIME-OFFSET=-25.5,PRECISE=YES",
     "RESOLUTION=1920x1080",
     "BYTERANGE=\"100@0\"",
-    "X=" ++ "9" ** 40,
-    "A=\"" ++ "x" ** 200 ++ "\"",
+    "X=" ++ @as([40]u8, @splat('9')),
+    "A=\"" ++ @as([200]u8, @splat('x')) ++ "\"",
 };
 
 /// Walking an attribute list terminates, and every decoder on every
@@ -655,16 +653,14 @@ fn fuzzResolve(_: void, smith: *Smith) !void {
 /// One fuzz target, addressable by name.
 ///
 /// `zig build test` reaches these through the `test` blocks above and Zig's
-/// own fuzzer would reach them through `std.testing.fuzz`. This is the third
-/// way in, for `tools/fuzz.zig`, which exists because on this toolchain the
-/// second one does not work — `zig build fuzz --fuzz` compiles now that the
-/// devshell patches Zig, and then reports `pcs_len was zero` because nothing
-/// populates the coverage table.
+/// own fuzzer reaches them through `std.testing.fuzz`. This is the third way
+/// in, for `tools/fuzz.zig`, a loop that trades coverage feedback for a run
+/// that is the same on every machine.
 pub const Target = struct {
     name: []const u8,
     run: *const fn (input: []const u8) anyerror!void,
     /// Inputs worth mutating: the same seeds the tests above run, which are
-    /// what stands in for the coverage feedback a real fuzzer would have.
+    /// what stands in for the coverage feedback Zig's fuzzer has.
     corpus: []const []const u8,
     /// The buffer this target reads its input into.
     ///

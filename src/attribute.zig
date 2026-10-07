@@ -490,8 +490,8 @@ fn hexDigit(c: u8) error{InvalidHex}!u8 {
 /// whose spelling cannot be reached this way — there are a few, like
 /// `SAMPLE-AES-CTR` — is spelled out in the enum with `@"..."`.
 pub fn parseEnumerated(comptime E: type, text: []const u8) error{UnknownValue}!E {
-    inline for (@typeInfo(E).@"enum".fields) |field| {
-        if (eqlEnumerated(field.name, text)) return @field(E, field.name);
+    inline for (@typeInfo(E).@"enum".field_names) |name| {
+        if (eqlEnumerated(name, text)) return @field(E, name);
     }
     return error.UnknownValue;
 }
@@ -673,7 +673,7 @@ test "hex that is not hex" {
 }
 
 test "a hex sequence too long for a u128 still decodes to bytes" {
-    var it: Iterator = .init("SCTE35-OUT=0x" ++ "AB" ** 20);
+    var it: Iterator = .init("SCTE35-OUT=0x" ++ "ABABABABABABABABABABABABABABABABABABABAB");
     const a = (try it.next()).?;
     try testing.expectError(error.InvalidHex, a.hex());
     var buffer: [32]u8 = undefined;

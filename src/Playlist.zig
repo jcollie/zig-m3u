@@ -1592,10 +1592,11 @@ pub fn format(p: *const Playlist, w: *Io.Writer) Io.Writer.Error!void {
 /// It reflects over the fields rather than naming them, so a field added to
 /// any of these types is compared without this having to be updated.
 pub fn eql(a: *const Playlist, b: *const Playlist) bool {
-    inline for (@typeInfo(Playlist).@"struct".fields) |field| {
-        const skip = comptime std.mem.eql(u8, field.name, "arena") or
-            std.mem.eql(u8, field.name, "source");
-        if (!skip and !deepEql(field.type, @field(a, field.name), @field(b, field.name))) {
+    const info = @typeInfo(Playlist).@"struct";
+    inline for (info.field_names, info.field_types) |name, F| {
+        const skip = comptime std.mem.eql(u8, name, "arena") or
+            std.mem.eql(u8, name, "source");
+        if (!skip and !deepEql(F, @field(a, name), @field(b, name))) {
             return false;
         }
     }
@@ -1641,8 +1642,8 @@ fn deepEql(comptime T: type, a: T, b: T) bool {
         },
         .@"struct" => |info| blk: {
             if (@hasDecl(T, "eql")) break :blk T.eql(a, b);
-            inline for (info.fields) |field| {
-                if (!deepEql(field.type, @field(a, field.name), @field(b, field.name))) {
+            inline for (info.field_names, info.field_types) |name, F| {
+                if (!deepEql(F, @field(a, name), @field(b, name))) {
                     break :blk false;
                 }
             }
@@ -1654,13 +1655,9 @@ fn deepEql(comptime T: type, a: T, b: T) bool {
             const Tag = std.meta.Tag(T);
             const tag = std.meta.activeTag(a);
             if (tag != std.meta.activeTag(b)) break :blk false;
-            inline for (info.fields) |field| {
-                if (tag == @field(Tag, field.name)) {
-                    break :blk deepEql(
-                        field.type,
-                        @field(a, field.name),
-                        @field(b, field.name),
-                    );
+            inline for (info.field_names, info.field_types) |name, F| {
+                if (tag == @field(Tag, name)) {
+                    break :blk deepEql(F, @field(a, name), @field(b, name));
                 }
             }
             break :blk true;

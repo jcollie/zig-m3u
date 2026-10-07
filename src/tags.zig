@@ -470,7 +470,7 @@ pub fn parseAttributes(
     value: []const u8,
 ) Allocator.Error!T {
     var out: T = .{};
-    var seen = [1]bool{false} ** specs.len;
+    var seen: [specs.len]bool = @splat(false);
     var extra: std.ArrayList(Attribute) = .empty;
 
     var it: attribute.Iterator = .init(value);
@@ -2141,7 +2141,7 @@ test "tag names, in both directions" {
     try testing.expectEqual(Name.ext_x_endlist, fromText("EXT-X-Endlist").?);
     try testing.expectEqual(@as(?Name, null), fromText("EXT-X-NOT-A-TAG"));
     // Longer than any tag there is, which must not overrun the buffer.
-    try testing.expectEqual(@as(?Name, null), fromText("EXT-X-" ++ "A" ** 200));
+    try testing.expectEqual(@as(?Name, null), fromText("EXT-X-" ++ @as([200]u8, @splat('A'))));
     try testing.expectEqual(@as(?Name, null), fromText(""));
 
     try testing.expectEqualStrings("EXT-X-I-FRAME-STREAM-INF", Name.ext_x_i_frame_stream_inf.text());

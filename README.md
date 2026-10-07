@@ -7,9 +7,10 @@ SPDX-License-Identifier: MIT
 
 An M3U and M3U8 playlist parser and writer for Zig.
 
-Requires Zig 0.16. It reads all three layers of history in the format — the
-plain `.m3u` list of file names, the extended M3U that added `#EXTM3U` and
-`#EXTINF`, and HTTP Live Streaming as
+Requires Zig 0.17 (for Zig 0.16, use the `zig-0.16` branch or the `v0.1.0`
+tag). It reads all three layers of history in the format — the plain `.m3u`
+list of file names, the extended M3U that added `#EXTM3U` and `#EXTINF`, and
+HTTP Live Streaming as
 [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216) defines it — plus the tags
 added to HLS after that RFC was published: low-latency parts, delta updates,
 content steering, variable substitution. Its dependencies are
@@ -332,18 +333,25 @@ emitted a format only this parser could read — this would not.
 
 ### Fuzzing
 
-**Zig 0.16.0 cannot build a test executable in fuzz mode**, so `zig build fuzz
---fuzz` fails to compile for any project with a fuzz test in it: the compiler's
-own `test_runner.zig` hands an error return trace to a function that takes a
-different type of stack trace. `flake.nix` patches that one line in a symlink
-farm of the standard library, which buys the fuzzer — and not its coverage,
-because nothing in this release populates the table of program counters, so a
-bounded run ends with `pcs_len was zero` and an unbounded one panics in the
-build runner's coverage thread.
+The targets in `tests/fuzz.zig` are written for Zig's own fuzzer, which steers
+by coverage:
 
-So there is a loop of our own instead, in `tools/fuzz.zig`. What it has in
-place of coverage feedback is a corpus of real playlists to mutate, which is
-enough: it found every round-trip bug listed above.
+```console
+$ zig build fuzz --fuzz                          # until interrupted, with a web interface
+$ zig build fuzz --fuzz=1M                       # a bounded run, then a report
+$ zig build fuzz --fuzz -Dfuzz-filter=playlist   # one target
+```
+
+Coverage needs the test binary compiled by LLVM, which Debug otherwise does
+not use, so `build.zig` sets `use_llvm` on every test binary; kcov needs it
+for the same reason. The bounded report has one entry per test binary, named
+after its first fuzz test, and the others in that binary ran too. A finding
+prints `input saved to '.zig-cache/f/crash'` above the report.
+
+There is also a loop of our own, in `tools/fuzz.zig`, which mutates a corpus
+of real playlists without coverage feedback. It found every round-trip bug
+listed above, and it is what the workflow runs, because a count of inputs
+from a fixed seed is the same run on every machine:
 
 ```console
 $ zig build fuzz-run                                     # a minute of each target

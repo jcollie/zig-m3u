@@ -135,7 +135,15 @@ test "every fixture parses without needing an allocation that could fail" {
     }
 }
 
-fn parseAndWrite(gpa: Allocator, bytes: []const u8) !void {
+fn parseAndWrite(failing: Allocator, bytes: []const u8) !void {
+    // The arena grows a buffer in place when the allocator beneath it can
+    // resize it, and whether `testing.allocator` can depends on what else it
+    // happens to be holding. Each success is an allocation the arena did not
+    // make, so the count `checkAllAllocationFailures` steps through would
+    // vary from one run to the next. Refusing every resize makes the arena
+    // allocate each time, and the count the same on every run.
+    var no_resize: std.testing.FailingAllocator = .init(failing, .{ .resize_fail_index = 0 });
+    const gpa = no_resize.allocator();
     var playlist = try Playlist.parse(gpa, bytes, .{});
     defer playlist.deinit();
     const written = try playlist.toTextAlloc(gpa);

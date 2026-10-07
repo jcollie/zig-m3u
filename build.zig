@@ -47,15 +47,21 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.stdio = .inherit;
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run the command line tool");
     run_step.dependOn(&run_cmd.step);
 
     // A test executable covers one module, so each needs its own. Missing one
     // out would not fail: its tests would simply never run.
+    //
+    // Every test binary is compiled by LLVM, even in Debug. The self-hosted
+    // backend Debug otherwise uses emits no coverage instrumentation and
+    // debug info kcov cannot read, so under it the fuzzer finds no program
+    // counters and kcov reports zero lines. `build.zig` cannot see whether
+    // `--fuzz` was passed, so it is always on, at a few seconds of compile.
     const test_step = b.step("test", "Run tests");
     for ([_]*std.Build.Module{ mod, exe.root_module }) |m| {
-        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m })).step);
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m, .use_llvm = true })).step);
     }
 
     // The round-trip and conformance tests, which read the playlists in
@@ -64,7 +70,7 @@ pub fn build(b: *std.Build) void {
     // they get the directory as a build option because a test binary is run
     // from wherever the build runner happens to be.
     const playlists = b.addOptions();
-    playlists.addOptionPath("dir", b.path("tests/playlists"));
+    playlists.addOptionPathDirectory("dir", b.path("tests/playlists"));
 
     const suite_mod = b.createModule(.{
         .root_source_file = b.path("tests/playlists.zig"),
@@ -75,7 +81,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "playlists", .module = playlists.createModule() },
         },
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = suite_mod })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = suite_mod, .use_llvm = true })).step);
 
     // The fuzz targets: what the parser and the writer must do with input
     // nobody wrote. They are ordinary tests as well as fuzz tests, so `zig
@@ -87,9 +93,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "m3u", .module = mod }},
     });
-    // Zig's fuzzer takes one test at a time and keeps a coverage file per
-    // test, so naming a target is what you want when a finding is being
-    // chased: `zig build fuzz --fuzz -Dfuzz-filter=playlist`.
+    // Every fuzz test in a binary shares its time and its coverage figure, so
+    // naming a target is what you want when a finding is being chased: `zig
+    // build fuzz --fuzz -Dfuzz-filter=playlist`.
     const fuzz_filter = b.option(
         []const u8,
         "fuzz-filter",
@@ -98,6 +104,7 @@ pub fn build(b: *std.Build) void {
     const fuzz_tests = b.addTest(.{
         .root_module = fuzz_mod,
         .filters = if (fuzz_filter) |f| &.{f} else &.{},
+        .use_llvm = true,
     });
     test_step.dependOn(&b.addRunArtifact(fuzz_tests).step);
 
@@ -107,11 +114,12 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "The fuzz targets: add --fuzz to fuzz them");
     fuzz_step.dependOn(&b.addRunArtifact(fuzz_tests).step);
 
-    // The loop that drives those same targets without Zig's fuzzer, which
-    // this toolchain cannot usefully run: `tools/fuzz.zig` says why, and the
-    // short version is that the coverage table comes back empty. Optimised,
-    // because a fuzzer's whole job is how many inputs it gets through, and
-    // ReleaseSafe keeps every check that makes a failure a failure.
+    // The loop that drives those same targets without Zig's fuzzer: no
+    // coverage feedback, but a fixed count of inputs from a fixed seed, so it
+    // is the same run on every machine, which is what the workflow wants.
+    // Optimised, because a fuzzer's whole job is how many inputs it gets
+    // through, and ReleaseSafe keeps every check that makes a failure a
+    // failure.
     const fuzz_run = b.addExecutable(.{
         .name = "zig-m3u-fuzz",
         .root_module = b.createModule(.{
@@ -123,7 +131,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_fuzz = b.addRunArtifact(fuzz_run);
     run_fuzz.stdio = .inherit;
-    if (b.args) |a| run_fuzz.addArgs(a);
+    run_fuzz.addPassthruArgs();
     const fuzz_run_step = b.step("fuzz-run", "Fuzz the targets with a loop of our own");
     fuzz_run_step.dependOn(&run_fuzz.step);
 
@@ -166,7 +174,7 @@ pub fn build(b: *std.Build) void {
 
     const run_docs_server = b.addRunArtifact(docs_server);
     run_docs_server.step.dependOn(&install_docs.step);
-    run_docs_server.addArg(b.getInstallPath(.prefix, "docs"));
+    run_docs_server.addDirectoryArg(library.getEmittedDocs());
     run_docs_server.addArg(b.fmt("{d}", .{docs_port}));
     // The server runs until interrupted, so its output has to reach the
     // terminal rather than being captured by the build runner.
@@ -177,7 +185,7 @@ pub fn build(b: *std.Build) void {
 
     // The server has tests of its own; without this they would never run.
     test_step.dependOn(&b.addRunArtifact(
-        b.addTest(.{ .root_module = docs_server.root_module }),
+        b.addTest(.{ .root_module = docs_server.root_module, .use_llvm = true }),
     ).step);
     check_step.dependOn(&docs_server.step);
 }
