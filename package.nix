@@ -15,7 +15,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "zig-m3u";
-  version = "0.0.0";
+  version = "0.1.0";
 
   # Named rather than filtered, so that editing something outside this list --
   # the flake, a scratch file -- does not rebuild the package.
